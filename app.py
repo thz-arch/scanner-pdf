@@ -1,5 +1,4 @@
-
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, jsonify
 import cv2
 import numpy as np
 import tempfile
@@ -9,16 +8,21 @@ from PIL import Image
 app = Flask(__name__)
 
 def process_scan(image_path):
+    # Lê imagem colorida
     image = cv2.imread(image_path)
     orig = image.copy()
+
+    # Converte para tons de cinza apenas para detecção de contornos
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     gray = cv2.equalizeHist(gray)
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
     edged = cv2.Canny(blur, 30, 100)
 
+    # Encontra e ordena contornos
     contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
+    # Busca contorno retangular de maior área
     doc_cnt = None
     for c in contours:
         area = cv2.contourArea(c)
@@ -33,6 +37,7 @@ def process_scan(image_path):
     if doc_cnt is None:
         raise Exception("Documento não detectado")
 
+    # Ordena pontos do retângulo
     def order_points(pts):
         pts = pts.reshape(4, 2)
         rect = np.zeros((4, 2), dtype="float32")
@@ -44,6 +49,7 @@ def process_scan(image_path):
         rect[3] = pts[np.argmax(diff)]
         return rect
 
+    # Função de perspectiva
     def four_point_transform(image, pts):
         rect = order_points(pts)
         (tl, tr, br, bl) = rect
@@ -53,6 +59,7 @@ def process_scan(image_path):
         heightB = np.linalg.norm(tl - bl)
         maxWidth = max(int(widthA), int(widthB))
         maxHeight = max(int(heightA), int(heightB))
+
         dst = np.array([
             [0, 0],
             [maxWidth - 1, 0],
@@ -63,18 +70,16 @@ def process_scan(image_path):
         warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
         return warped
 
-    warped = four_point_transform(orig, doc_cnt)
+    # Aplica transformação e mantém cor original
+    warped_color = four_point_transform(orig, doc_cnt)
 
-    final = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-    final = cv2.adaptiveThreshold(final, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                  cv2.THRESH_BINARY, 11, 2)
-
+    # Salva imagem colorida extraída temporariamente
     temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     temp_img = temp_file.name.replace('.pdf', '.jpg')
-    cv2.imwrite(temp_img, final)
+    cv2.imwrite(temp_img, warped_color)
 
+    # Gera PDF com a imagem colorida
     pdf = FPDF()
-    img = Image.open(temp_img)
     pdf.add_page()
     pdf.image(temp_img, x=10, y=10, w=190)
     pdf.output(temp_file.name)
@@ -84,13 +89,22 @@ def process_scan(image_path):
 @app.route("/scan", methods=["POST"])
 def scan():
     if 'file' not in request.files:
-        return "Nenhum arquivo enviado", 400
+        return jsonify({"error": "Nenhum arquivo enviado"}), 400
 
     file = request.files['file']
     with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_input:
         file.save(temp_input.name)
-        result_path = process_scan(temp_input.name)
-        return send_file(result_path, mimetype='application/pdf', as_attachment=True, download_name='documento.pdf')
+        try:
+            result_path = process_scan(temp_input.name)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+
+    return send_file(
+        result_path,
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name='documento.pdf'
+    )
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
