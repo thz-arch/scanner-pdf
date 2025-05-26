@@ -12,32 +12,53 @@ def process_scan(image_path):
     image = cv2.imread(image_path)
     orig = image.copy()
 
-    # Converte para tons de cinza apenas para detecção de contornos
+    # Converte para tons de cinza para detecção de contornos
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
+    # Aplica CLAHE para melhorar contraste
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    gray = clahe.apply(gray)
+
+    # Desfoque e fechamento morfológico para reduzir ruído
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
-    edged = cv2.Canny(blur, 30, 100)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    closed = cv2.morphologyEx(blur, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    # Encontra e ordena contornos
+    # Detecta bordas
+    edged = cv2.Canny(closed, 50, 150)
+
+    # Encontra contornos
     contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
-    # Busca contorno retangular de maior área
+    # Função para pontuar candidatos de retângulo com base em área e proporção
+    def score_contour(cnt):
+        area = cv2.contourArea(cnt)
+        if area < 5000:
+            return 0
+        peri = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+        if len(approx) != 4:
+            return 0
+        x, y, w, h = cv2.boundingRect(approx)
+        ar = float(w) / h if h else 0
+        # Proporção próxima a A4 (~1.41) recebe pontuação maior
+        ar_score = 1 - abs(ar - 1.414) / 1.414
+        return area * ar_score
+
+    # Ordena contornos por pontuação
+    contours = sorted(contours, key=score_contour, reverse=True)
+
     doc_cnt = None
     for c in contours:
-        area = cv2.contourArea(c)
-        if area < 2000:
-            continue
-        peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-        if len(approx) == 4:
-            doc_cnt = approx
+        if score_contour(c) > 0:
+            # Aproximação dos pontos
+            peri = cv2.arcLength(c, True)
+            doc_cnt = cv2.approxPolyDP(c, 0.03 * peri, True)
             break
 
     if doc_cnt is None:
         raise Exception("Documento não detectado")
 
-    # Ordena pontos do retângulo
+    # Ordena pontos e aplica perspectiva
     def order_points(pts):
         pts = pts.reshape(4, 2)
         rect = np.zeros((4, 2), dtype="float32")
@@ -49,7 +70,6 @@ def process_scan(image_path):
         rect[3] = pts[np.argmax(diff)]
         return rect
 
-    # Função de perspectiva
     def four_point_transform(image, pts):
         rect = order_points(pts)
         (tl, tr, br, bl) = rect
@@ -59,7 +79,6 @@ def process_scan(image_path):
         heightB = np.linalg.norm(tl - bl)
         maxWidth = max(int(widthA), int(widthB))
         maxHeight = max(int(heightA), int(heightB))
-
         dst = np.array([
             [0, 0],
             [maxWidth - 1, 0],
@@ -67,8 +86,7 @@ def process_scan(image_path):
             [0, maxHeight - 1]
         ], dtype="float32")
         M = cv2.getPerspectiveTransform(rect, dst)
-        warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
-        return warped
+        return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
     # Aplica transformação e mantém cor original
     warped_color = four_point_transform(orig, doc_cnt)
