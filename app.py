@@ -12,53 +12,53 @@ def process_scan(image_path):
     image = cv2.imread(image_path)
     orig = image.copy()
 
-    # Converte para tons de cinza para detecção de contornos
+    # Pré-processamento: reduz ruído mantendo bordas
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Aplica CLAHE para melhorar contraste
+    blur = cv2.bilateralFilter(gray, 9, 75, 75)
+
+    # Aumenta contraste local
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    gray = clahe.apply(gray)
+    enhanced = clahe.apply(blur)
 
-    # Desfoque e fechamento morfológico para reduzir ruído
-    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    # Fechamento morfológico para remover pequenos espaços
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    closed = cv2.morphologyEx(blur, cv2.MORPH_CLOSE, kernel, iterations=2)
+    closed = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    # Detecta bordas
-    edged = cv2.Canny(closed, 50, 150)
+    # Detecta bordas com Canny adaptado
+    minVal, maxVal = 50, 150
+    edged = cv2.Canny(closed, minVal, maxVal)
 
-    # Encontra contornos
-    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    # Aproximação de contornos
+    contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Função para pontuar candidatos de retângulo com base em área e proporção
+    # Função de pontuação: área e proporção mais flexível para comprovantes
     def score_contour(cnt):
         area = cv2.contourArea(cnt)
-        if area < 5000:
+        if area < 1000:
             return 0
         peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
         if len(approx) != 4:
             return 0
         x, y, w, h = cv2.boundingRect(approx)
         ar = float(w) / h if h else 0
-        # Proporção próxima a A4 (~1.41) recebe pontuação maior
-        ar_score = 1 - abs(ar - 1.414) / 1.414
-        return area * ar_score
+        # Receipts podem ser verticais ou horizontais, proporção entre 0.5 e 3
+        if not (0.5 < ar < 3.0):
+            return 0
+        return area
 
-    # Ordena contornos por pontuação
-    contours = sorted(contours, key=score_contour, reverse=True)
-
+    # Escolhe melhor contorno
+    candidates = sorted(contours, key=score_contour, reverse=True)
     doc_cnt = None
-    for c in contours:
-        if score_contour(c) > 0:
-            # Aproximação dos pontos
-            peri = cv2.arcLength(c, True)
-            doc_cnt = cv2.approxPolyDP(c, 0.03 * peri, True)
-            break
-
+    if candidates and score_contour(candidates[0]) > 0:
+        doc_cnt = cv2.approxPolyDP(candidates[0], 0.02 * cv2.arcLength(candidates[0], True), True)
+    
+    # Fallback: contorno da borda da imagem inteira
     if doc_cnt is None:
-        raise Exception("Documento não detectado")
+        h, w = gray.shape
+        doc_cnt = np.array([[[0,0]], [[w,0]], [[w,h]], [[0,h]]])
 
-    # Ordena pontos e aplica perspectiva
+    # Ordena pontos do retângulo
     def order_points(pts):
         pts = pts.reshape(4, 2)
         rect = np.zeros((4, 2), dtype="float32")
@@ -70,6 +70,7 @@ def process_scan(image_path):
         rect[3] = pts[np.argmax(diff)]
         return rect
 
+    # Transforma perspectiva
     def four_point_transform(image, pts):
         rect = order_points(pts)
         (tl, tr, br, bl) = rect
@@ -88,15 +89,13 @@ def process_scan(image_path):
         M = cv2.getPerspectiveTransform(rect, dst)
         return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
-    # Aplica transformação e mantém cor original
+    # Aplica transformação e mantém cores originais
     warped_color = four_point_transform(orig, doc_cnt)
 
-    # Salva imagem colorida extraída temporariamente
+    # Salva PDF
     temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     temp_img = temp_file.name.replace('.pdf', '.jpg')
     cv2.imwrite(temp_img, warped_color)
-
-    # Gera PDF com a imagem colorida
     pdf = FPDF()
     pdf.add_page()
     pdf.image(temp_img, x=10, y=10, w=190)
@@ -108,7 +107,6 @@ def process_scan(image_path):
 def scan():
     if 'file' not in request.files:
         return jsonify({"error": "Nenhum arquivo enviado"}), 400
-
     file = request.files['file']
     with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_input:
         file.save(temp_input.name)
@@ -116,12 +114,11 @@ def scan():
             result_path = process_scan(temp_input.name)
         except Exception as e:
             return jsonify({"error": str(e)}), 400
-
     return send_file(
         result_path,
         mimetype='application/pdf',
         as_attachment=True,
-        download_name='documento.pdf'
+        download_name='comprovante.pdf'
     )
 
 if __name__ == "__main__":
