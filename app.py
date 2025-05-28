@@ -41,25 +41,34 @@ def process_scan(image_path):
     if not contours:
         raise Exception("Nenhum contorno encontrado")
 
-    # Escolhe o contorno de maior área
-    largest = max(contours, key=cv2.contourArea)
-    area = cv2.contourArea(largest)
-    img_area = orig.shape[0] * orig.shape[1]
-    # Se o maior contorno for menor que 30% da imagem, faz fallback
-    if area < 0.3 * img_area:
+    # Tenta encontrar o maior contorno com 4 lados (folha)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    doc_cnt = None
+    for cnt in contours:
+        peri = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+        if len(approx) == 4:
+            doc_cnt = approx
+            break
+    # Se não encontrar, aproxima o maior contorno para 4 lados
+    if doc_cnt is None:
+        largest = contours[0]
+        peri = cv2.arcLength(largest, True)
+        approx = cv2.approxPolyDP(largest, 0.02 * peri, True)
+        if len(approx) >= 4:
+            doc_cnt = approx[:4]
+    # Se ainda não encontrar, usa a imagem inteira
+    if doc_cnt is None or len(doc_cnt) != 4:
         h, w = orig.shape[:2]
-        box = np.array([[0,0],[w-1,0],[w-1,h-1],[0,h-1]], dtype="int")
-    else:
-        rect = cv2.minAreaRect(largest)
-        box = cv2.boxPoints(rect).astype("int")
+        doc_cnt = np.array([[[0,0]], [[w-1,0]], [[w-1,h-1]], [[0,h-1]]], dtype="int")
 
-    # Desenha para debug
+    # Debug visual
     dbg = orig.copy()
-    cv2.drawContours(dbg, [box], -1, (0, 255, 0), 3)
+    cv2.drawContours(dbg, [doc_cnt], -1, (0, 255, 0), 3)
     cv2.imwrite("debug_minAreaRect.jpg", dbg)
 
     # Usa 'box' como doc_cnt
-    doc_cnt = box.reshape(4,1,2)
+    doc_cnt = doc_cnt.reshape(4,1,2)
 
     # Debug opcional
     debug_img = orig.copy()
@@ -99,15 +108,21 @@ def process_scan(image_path):
     try:
         warped_color = four_point_transform(orig, doc_cnt)
 
-        # Gera PDF
+        # Pós-processamento: nitidez e binarização forte
+        kernel_sharp = np.array([[0, -1, 0], [-1, 5,-1], [0, -1, 0]])
+        warped_color = cv2.filter2D(warped_color, -1, kernel_sharp)
+        warped_gray = cv2.cvtColor(warped_color, cv2.COLOR_BGR2GRAY)
+        _, warped_bin = cv2.threshold(warped_gray, 180, 255, cv2.THRESH_BINARY)
+        warped_final = cv2.cvtColor(warped_bin, cv2.COLOR_GRAY2BGR)
+
+        # Salva imagem final para PDF
         temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
         temp_img = temp_file.name.replace('.pdf', '.jpg')
-        cv2.imwrite(temp_img, warped_color)
+        cv2.imwrite(temp_img, warped_final)
         pdf = FPDF()
         pdf.add_page()
         pdf.image(temp_img, x=10, y=10, w=190)
         pdf.output(temp_file.name)
-
         return temp_file.name
     except Exception as e:
         import traceback
