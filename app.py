@@ -1,9 +1,9 @@
-from flask import Flask, request, send_file, jsonify
 import cv2
 import numpy as np
 import tempfile
 from fpdf import FPDF
 from PIL import Image
+from flask import Flask, request, send_file, jsonify
 
 app = Flask(__name__)
 
@@ -31,51 +31,42 @@ def process_scan(image_path):
     # Aproximação de contornos
     contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Função de pontuação: área e proporção mais flexível para comprovantes
+    # Função de pontuação: apenas área e proporção inicial
     def score_contour(cnt):
         area = cv2.contourArea(cnt)
-        if area < 1000:
+        if area < 1000: # Área mínima para considerar
             return 0
-        peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-        if len(approx) != 4:
-            return 0
-        x, y, w, h = cv2.boundingRect(approx)
+        # Proporção inicial (pode ser ajustada)
+        x, y, w, h = cv2.boundingRect(cnt)
         ar = float(w) / h if h else 0
-        # Receipts podem ser verticais ou horizontais, proporção entre 0.5 e 3
-        if not (0.5 < ar < 3.0):
-            return 0
+        if not (0.2 < ar < 5.0): # Proporção mais flexível inicialmente
+             return 0
         return area
 
-    # Escolhe melhor contorno
+    # Escolhe melhor contorno baseado na área e proporção inicial
     candidates = sorted(contours, key=score_contour, reverse=True)
     doc_cnt = None
-    
-    # Adicionar depuração aqui
-    print(f"Total de contornos encontrados: {len(contours)}")
-    if candidates:
-        print(f"Pontuação do melhor candidato: {score_contour(candidates[0])}")
-        # Verificar se o melhor candidato tem pontuação > 0 e 4 vértices
-        if score_contour(candidates[0]) > 0:
-             peri = cv2.arcLength(candidates[0], True)
-             approx = cv2.approxPolyDP(candidates[0], 0.02 * peri, True)
-             if len(approx) == 4:
-                doc_cnt = approx
-                print("Contorno de 4 vértices válido encontrado.")
-             else:
-                print(f"Melhor candidato não tem 4 vértices. Vértices encontrados: {len(approx)}")
-        else:
-            print("Melhor candidato não atende aos critérios de pontuação.")
-    else:
-        print("Nenhum candidato de contorno encontrado.")
 
-    # Fallback: contorno da borda da imagem inteira
+    print(f"Total de contornos encontrados: {len(contours)}")
+
+    # Iterar sobre os candidatos para encontrar um com 4 vértices
+    for cnt in candidates:
+        peri = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True) # Ajuste o 0.02 se necessário
+        if len(approx) == 4:
+            doc_cnt = approx
+            print("Contorno de 4 vértices válido encontrado.")
+            break # Encontrou o melhor candidato com 4 vértices, para
+
     if doc_cnt is None:
+        print("Nenhum candidato de contorno com 4 vértices encontrado.")
+        # Fallback: contorno da borda da imagem inteira
         h, w = gray.shape
         doc_cnt = np.array([[[0,0]], [[w,0]], [[w,h]], [[0,h]]])
         print("Usando contorno da imagem inteira como fallback.")
     else:
         print(f"Contorno do documento detectado: {doc_cnt.reshape(4, 2)}")
+
 
     # Ordena pontos do retângulo
     def order_points(pts):
