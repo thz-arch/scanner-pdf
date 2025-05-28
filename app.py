@@ -140,7 +140,26 @@ def process_scan(image_path):
     # Contornos
     contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        raise Exception("Nenhum contorno encontrado")
+        # Fallback: tenta detectar bordas com Document AI
+        vertices = get_documentai_vertices(image_path)
+        if vertices is not None:
+            warped_color = four_point_transform(orig, vertices)
+            # Pós-processamento: nitidez e binarização forte
+            kernel_sharp = np.array([[0, -1, 0], [-1, 5,-1], [0, -1, 0]])
+            warped_color = cv2.filter2D(warped_color, -1, kernel_sharp)
+            warped_gray = cv2.cvtColor(warped_color, cv2.COLOR_BGR2GRAY)
+            _, warped_bin = cv2.threshold(warped_gray, 180, 255, cv2.THRESH_BINARY)
+            warped_final = cv2.cvtColor(warped_bin, cv2.COLOR_GRAY2BGR)
+            temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            temp_img = temp_file.name.replace('.pdf', '.jpg')
+            cv2.imwrite(temp_img, warped_final)
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.image(temp_img, x=10, y=10, w=190)
+            pdf.output(temp_file.name)
+            return temp_file.name
+        else:
+            raise Exception("Nenhum contorno encontrado e IA também não detectou bordas.")
 
     # Tenta encontrar o maior contorno com 4 lados (folha)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
