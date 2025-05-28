@@ -32,32 +32,21 @@ def process_scan(image_path):
 
     # Contornos
     contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+    if not contours:
+        raise Exception("Nenhum contorno encontrado")
 
-    def score_contour(cnt):
-        area = cv2.contourArea(cnt)
-        if area < 10000:
-            return 0
-        x, y, w, h = cv2.boundingRect(cnt)
-        ar = float(w) / h if h else 0
-        if not (0.5 < ar < 2.5):  # proporção da folha
-            return 0
-        return area
+    # Escolhe o contorno de maior área
+    largest = max(contours, key=cv2.contourArea)
+    rect = cv2.minAreaRect(largest)
+    box = cv2.boxPoints(rect).astype("int")
 
-    candidates = sorted(contours, key=score_contour, reverse=True)
-    doc_cnt = None
+    # Desenha para debug
+    dbg = orig.copy()
+    cv2.drawContours(dbg, [box], -1, (0, 255, 0), 3)
+    cv2.imwrite("debug_minAreaRect.jpg", dbg)
 
-    for cnt in candidates:
-        peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
-        if len(approx) == 4:
-            doc_cnt = approx
-            break
-
-    if doc_cnt is None:
-        print("Nenhuma borda clara encontrada, fallback para imagem inteira")
-        h, w = gray.shape
-        doc_cnt = np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]])
+    # Usa 'box' como doc_cnt
+    doc_cnt = box.reshape(4,1,2)
 
     # Debug opcional
     debug_img = orig.copy()
