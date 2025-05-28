@@ -44,20 +44,24 @@ def process_scan(image_path):
     # Tenta encontrar o maior contorno com 4 lados (folha)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
     doc_cnt = None
+    img_area = orig.shape[0] * orig.shape[1]
     for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 0.4 * img_area:
+            continue
         peri = cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
         if len(approx) == 4:
-            doc_cnt = approx
-            break
-    # Se não encontrar, aproxima o maior contorno para 4 lados
-    if doc_cnt is None:
-        largest = contours[0]
-        peri = cv2.arcLength(largest, True)
-        approx = cv2.approxPolyDP(largest, 0.02 * peri, True)
-        if len(approx) >= 4:
-            doc_cnt = approx[:4]
-    # Se ainda não encontrar, usa a imagem inteira
+            # Checa proporção do retângulo
+            rect = cv2.minAreaRect(approx)
+            (w, h) = rect[1]
+            if w == 0 or h == 0:
+                continue
+            aspect = max(w, h) / min(w, h)
+            if 1.2 < aspect < 1.5:
+                doc_cnt = approx
+                break
+    # Se não encontrar, usa a imagem inteira
     if doc_cnt is None or len(doc_cnt) != 4:
         h, w = orig.shape[:2]
         doc_cnt = np.array([[[0,0]], [[w-1,0]], [[w-1,h-1]], [[0,h-1]]], dtype="int")
