@@ -54,9 +54,18 @@ def get_documentai_vertices(image_path, service_account_json=None):
             return None
     img = cv2.imread(image_path)
     h, w = img.shape[:2]
-    points = [[int(v["x"]*w), int(v["y"]*h)] for v in vertices]
-    if len(points) == 4:
-        return np.array(points, dtype="float32")
+    # Garante que todos os vértices possuem 'x' e 'y'
+    try:
+        points = []
+        for v in vertices:
+            if 'x' in v and 'y' in v:
+                points.append([int(v['x']*w), int(v['y']*h)])
+        if len(points) == 4:
+            return np.array(points, dtype="float32")
+        else:
+            print('Vértices retornados pelo Document AI não possuem 4 pontos válidos:', vertices)
+    except Exception as e:
+        print('Erro ao processar vértices do Document AI:', str(e), vertices)
     return None
 
 def process_scan(image_path):
