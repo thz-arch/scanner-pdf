@@ -90,18 +90,23 @@ def process_scan(image_path):
         M = cv2.getPerspectiveTransform(rect, dst)
         return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
-    warped_color = four_point_transform(orig, doc_cnt)
+    try:
+        warped_color = four_point_transform(orig, doc_cnt)
 
-    # Gera PDF
-    temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    temp_img = temp_file.name.replace('.pdf', '.jpg')
-    cv2.imwrite(temp_img, warped_color)
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.image(temp_img, x=10, y=10, w=190)
-    pdf.output(temp_file.name)
+        # Gera PDF
+        temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        temp_img = temp_file.name.replace('.pdf', '.jpg')
+        cv2.imwrite(temp_img, warped_color)
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.image(temp_img, x=10, y=10, w=190)
+        pdf.output(temp_file.name)
 
-    return temp_file.name
+        return temp_file.name
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        raise Exception(f"Erro no processamento: {str(e)}\nTraceback: {tb}")
 
 @app.route("/scan", methods=["POST"])
 def scan():
