@@ -176,7 +176,50 @@ def process_scan(image_path):
             pdf.output(temp_file.name)
             return temp_file.name
         else:
-            raise Exception("Nenhum contorno encontrado e IA também não detectou bordas.")
+            # Fallback: tenta usar docTR para encontrar o documento
+            try:
+                from doctr.io import DocumentFile
+                from doctr.models import ocr_predictor
+                doc = DocumentFile.from_images(image_path)
+                model = ocr_predictor(pretrained=True)
+                result = model(doc)
+                # Pega o maior bloco da página
+                page = result.pages[0]
+                if page.blocks:
+                    # Pega o bounding box do maior bloco
+                    block = max(page.blocks, key=lambda b: (b.geometry[1][0]-b.geometry[0][0])*(b.geometry[1][1]-b.geometry[0][1]))
+                    (x0, y0), (x1, y1) = block.geometry
+                    img = cv2.imread(image_path)
+                    h, w = img.shape[:2]
+                    x0, y0, x1, y1 = int(x0*w), int(y0*h), int(x1*w), int(y1*h)
+                    cropped = img[y0:y1, x0:x1]
+                    # Pós-processamento: nitidez e binarização forte
+                    kernel_sharp = np.array([[0, -1, 0], [-1, 5,-1], [0, -1, 0]])
+                    cropped = cv2.filter2D(cropped, -1, kernel_sharp)
+                    cropped_gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+                    _, cropped_bin = cv2.threshold(cropped_gray, 180, 255, cv2.THRESH_BINARY)
+                    cropped_final = cv2.cvtColor(cropped_bin, cv2.COLOR_GRAY2BGR)
+                    temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+                    temp_img = temp_file.name.replace('.pdf', '.jpg')
+                    cv2.imwrite(temp_img, cropped_final)
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.image(temp_img, x=10, y=10, w=190)
+                    pdf.output(temp_file.name)
+                    print('docTR recorte aplicado.')
+                    return temp_file.name
+            except Exception as doctr_e:
+                print('docTR não conseguiu recortar:', doctr_e)
+            # Fallback final: recorta a imagem inteira
+            print('Nenhum contorno, IA e docTR não detectaram bordas. Gerando PDF da imagem inteira.')
+            temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            temp_img = temp_file.name.replace('.pdf', '.jpg')
+            cv2.imwrite(temp_img, orig)
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.image(temp_img, x=10, y=10, w=190)
+            pdf.output(temp_file.name)
+            return temp_file.name
 
     # Tenta encontrar o maior contorno com 4 lados (folha)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
@@ -184,18 +227,18 @@ def process_scan(image_path):
     img_area = orig.shape[0] * orig.shape[1]
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 0.4 * img_area:
+        if area < 0.2 * img_area:  # menos restritivo
             continue
         peri = cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
         if len(approx) == 4:
-            # Checa proporção do retângulo
+            # Checa proporção do retângulo (mais flexível)
             rect = cv2.minAreaRect(approx)
             (w, h) = rect[1]
             if w == 0 or h == 0:
                 continue
             aspect = max(w, h) / min(w, h)
-            if 1.2 < aspect < 1.7:
+            if 0.7 < aspect < 2.0:  # aceita mais formatos
                 doc_cnt = approx
                 break
     # Se não encontrar, usa a imagem inteira
