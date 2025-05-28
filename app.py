@@ -50,13 +50,32 @@ def process_scan(image_path):
     # Escolhe melhor contorno
     candidates = sorted(contours, key=score_contour, reverse=True)
     doc_cnt = None
-    if candidates and score_contour(candidates[0]) > 0:
-        doc_cnt = cv2.approxPolyDP(candidates[0], 0.02 * cv2.arcLength(candidates[0], True), True)
     
+    # Adicionar depuração aqui
+    print(f"Total de contornos encontrados: {len(contours)}")
+    if candidates:
+        print(f"Pontuação do melhor candidato: {score_contour(candidates[0])}")
+        # Verificar se o melhor candidato tem pontuação > 0 e 4 vértices
+        if score_contour(candidates[0]) > 0:
+             peri = cv2.arcLength(candidates[0], True)
+             approx = cv2.approxPolyDP(candidates[0], 0.02 * peri, True)
+             if len(approx) == 4:
+                doc_cnt = approx
+                print("Contorno de 4 vértices válido encontrado.")
+             else:
+                print(f"Melhor candidato não tem 4 vértices. Vértices encontrados: {len(approx)}")
+        else:
+            print("Melhor candidato não atende aos critérios de pontuação.")
+    else:
+        print("Nenhum candidato de contorno encontrado.")
+
     # Fallback: contorno da borda da imagem inteira
     if doc_cnt is None:
         h, w = gray.shape
         doc_cnt = np.array([[[0,0]], [[w,0]], [[w,h]], [[0,h]]])
+        print("Usando contorno da imagem inteira como fallback.")
+    else:
+        print(f"Contorno do documento detectado: {doc_cnt.reshape(4, 2)}")
 
     # Ordena pontos do retângulo
     def order_points(pts):
