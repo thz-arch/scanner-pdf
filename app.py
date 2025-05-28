@@ -22,8 +22,8 @@ def process_scan(image_path):
     if np.mean(thresh) < 127:
         thresh = cv2.bitwise_not(thresh)
 
-    # Fechamento morfológico
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    # Fechamento morfológico (kernel maior para unir regiões)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (35, 35))
     closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     closed = cv2.dilate(closed, kernel, iterations=2)
 
@@ -37,8 +37,15 @@ def process_scan(image_path):
 
     # Escolhe o contorno de maior área
     largest = max(contours, key=cv2.contourArea)
-    rect = cv2.minAreaRect(largest)
-    box = cv2.boxPoints(rect).astype("int")
+    area = cv2.contourArea(largest)
+    img_area = orig.shape[0] * orig.shape[1]
+    # Se o maior contorno for menor que 30% da imagem, faz fallback
+    if area < 0.3 * img_area:
+        h, w = orig.shape[:2]
+        box = np.array([[0,0],[w-1,0],[w-1,h-1],[0,h-1]], dtype="int")
+    else:
+        rect = cv2.minAreaRect(largest)
+        box = cv2.boxPoints(rect).astype("int")
 
     # Desenha para debug
     dbg = orig.copy()
