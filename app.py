@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import tempfile
 from fpdf import FPDF
+from PIL import Image
 from flask import Flask, request, send_file, jsonify
 
 app = Flask(__name__)
@@ -9,36 +10,44 @@ app = Flask(__name__)
 def process_scan(image_path):
     image = cv2.imread(image_path)
     orig = image.copy()
-
+    
+    # Pré-processamento
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blur = cv2.bilateralFilter(gray, 9, 75, 75)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # Binarização adaptativa para destacar a folha
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    enhanced = clahe.apply(blur)
+    # Inverter se fundo for escuro
+    if np.mean(thresh) < 127:
+        thresh = cv2.bitwise_not(thresh)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    closed = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel, iterations=2)
+    # Fechamento morfológico
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    closed = cv2.dilate(closed, kernel, iterations=2)
 
+    # Borda
     edged = cv2.Canny(closed, 50, 150)
 
-    # Pega todos os contornos (não só externos)
-    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    # Contornos
+    contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
 
-    # Filtragem de contornos baseados em área e proporção
     def score_contour(cnt):
         area = cv2.contourArea(cnt)
         if area < 10000:
             return 0
         x, y, w, h = cv2.boundingRect(cnt)
-        ar = float(w) / h if h != 0 else 0
-        if not (0.5 < ar < 2.0):
+        ar = float(w) / h if h else 0
+        if not (0.5 < ar < 2.5):  # proporção da folha
             return 0
         return area
 
-    candidates = sorted(contours, key=cv2.contourArea, reverse=True)
+    candidates = sorted(contours, key=score_contour, reverse=True)
     doc_cnt = None
 
-    for cnt in candidates[:10]:  # Tenta os 10 maiores contornos
+    for cnt in candidates:
         peri = cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
         if len(approx) == 4:
@@ -46,14 +55,16 @@ def process_scan(image_path):
             break
 
     if doc_cnt is None:
+        print("Nenhuma borda clara encontrada, fallback para imagem inteira")
         h, w = gray.shape
-        doc_cnt = np.array([[[0,0]], [[w,0]], [[w,h]], [[0,h]]])
-    else:
-        # Para debug: salvar imagem com contorno
-        debug_img = orig.copy()
-        cv2.drawContours(debug_img, [doc_cnt], -1, (0, 255, 0), 3)
-        cv2.imwrite("detected_contour.jpg", debug_img)
+        doc_cnt = np.array([[[0, 0]], [[w, 0]], [[w, h]], [[0, h]]])
 
+    # Debug opcional
+    debug_img = orig.copy()
+    cv2.drawContours(debug_img, [doc_cnt], -1, (0, 255, 0), 3)
+    cv2.imwrite("detected_contour.jpg", debug_img)
+
+    # Ordenar e transformar
     def order_points(pts):
         pts = pts.reshape(4, 2)
         rect = np.zeros((4, 2), dtype="float32")
@@ -85,10 +96,10 @@ def process_scan(image_path):
 
     warped_color = four_point_transform(orig, doc_cnt)
 
+    # Gera PDF
     temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     temp_img = temp_file.name.replace('.pdf', '.jpg')
     cv2.imwrite(temp_img, warped_color)
-
     pdf = FPDF()
     pdf.add_page()
     pdf.image(temp_img, x=10, y=10, w=190)
