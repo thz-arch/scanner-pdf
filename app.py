@@ -41,7 +41,7 @@ def get_documentai_vertices(image_path, service_account_json=None):
         print('Document AI erro:', response.status_code, response.text)
         return None
     data = response.json()
-    # Procura os vértices do documento na resposta
+    # Loga a resposta completa para debug se não encontrar vértices
     try:
         vertices = data["document"]["pages"][0]["detectedDocument"]["layout"]["boundingPoly"]["normalizedVertices"]
         img = cv2.imread(image_path)
@@ -50,7 +50,7 @@ def get_documentai_vertices(image_path, service_account_json=None):
         if len(points) == 4:
             return np.array(points, dtype="float32")
     except Exception:
-        pass
+        print('Resposta completa do Document AI para debug:', json.dumps(data, indent=2, ensure_ascii=False))
     return None
 
 def process_scan(image_path):
