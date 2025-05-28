@@ -2,73 +2,58 @@ import cv2
 import numpy as np
 import tempfile
 from fpdf import FPDF
-from PIL import Image
 from flask import Flask, request, send_file, jsonify
 
 app = Flask(__name__)
 
 def process_scan(image_path):
-    # Lê imagem colorida
     image = cv2.imread(image_path)
     orig = image.copy()
 
-    # Pré-processamento: reduz ruído mantendo bordas
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blur = cv2.bilateralFilter(gray, 9, 75, 75)
 
-    # Aumenta contraste local
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     enhanced = clahe.apply(blur)
 
-    # Fechamento morfológico para remover pequenos espaços
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
     closed = cv2.morphologyEx(enhanced, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    # Detecta bordas com Canny adaptado
-    minVal, maxVal = 50, 150
-    edged = cv2.Canny(closed, minVal, maxVal)
+    edged = cv2.Canny(closed, 50, 150)
 
-    # Aproximação de contornos
-    contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Pega todos os contornos (não só externos)
+    contours, _ = cv2.findContours(edged, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Função de pontuação: apenas área e proporção inicial
+    # Filtragem de contornos baseados em área e proporção
     def score_contour(cnt):
         area = cv2.contourArea(cnt)
-        if area < 1000: # Área mínima para considerar
+        if area < 10000:
             return 0
-        # Proporção inicial (pode ser ajustada)
         x, y, w, h = cv2.boundingRect(cnt)
-        ar = float(w) / h if h else 0
-        if not (0.2 < ar < 5.0): # Proporção mais flexível inicialmente
-             return 0
+        ar = float(w) / h if h != 0 else 0
+        if not (0.5 < ar < 2.0):
+            return 0
         return area
 
-    # Escolhe melhor contorno baseado na área e proporção inicial
-    candidates = sorted(contours, key=score_contour, reverse=True)
+    candidates = sorted(contours, key=cv2.contourArea, reverse=True)
     doc_cnt = None
 
-    print(f"Total de contornos encontrados: {len(contours)}")
-
-    # Iterar sobre os candidatos para encontrar um com 4 vértices
-    for cnt in candidates:
+    for cnt in candidates[:10]:  # Tenta os 10 maiores contornos
         peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True) # Ajuste o 0.02 se necessário
+        approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
         if len(approx) == 4:
             doc_cnt = approx
-            print("Contorno de 4 vértices válido encontrado.")
-            break # Encontrou o melhor candidato com 4 vértices, para
+            break
 
     if doc_cnt is None:
-        print("Nenhum candidato de contorno com 4 vértices encontrado.")
-        # Fallback: contorno da borda da imagem inteira
         h, w = gray.shape
         doc_cnt = np.array([[[0,0]], [[w,0]], [[w,h]], [[0,h]]])
-        print("Usando contorno da imagem inteira como fallback.")
     else:
-        print(f"Contorno do documento detectado: {doc_cnt.reshape(4, 2)}")
+        # Para debug: salvar imagem com contorno
+        debug_img = orig.copy()
+        cv2.drawContours(debug_img, [doc_cnt], -1, (0, 255, 0), 3)
+        cv2.imwrite("detected_contour.jpg", debug_img)
 
-
-    # Ordena pontos do retângulo
     def order_points(pts):
         pts = pts.reshape(4, 2)
         rect = np.zeros((4, 2), dtype="float32")
@@ -80,7 +65,6 @@ def process_scan(image_path):
         rect[3] = pts[np.argmax(diff)]
         return rect
 
-    # Transforma perspectiva
     def four_point_transform(image, pts):
         rect = order_points(pts)
         (tl, tr, br, bl) = rect
@@ -99,13 +83,12 @@ def process_scan(image_path):
         M = cv2.getPerspectiveTransform(rect, dst)
         return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
-    # Aplica transformação e mantém cores originais
     warped_color = four_point_transform(orig, doc_cnt)
 
-    # Salva PDF
     temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
     temp_img = temp_file.name.replace('.pdf', '.jpg')
     cv2.imwrite(temp_img, warped_color)
+
     pdf = FPDF()
     pdf.add_page()
     pdf.image(temp_img, x=10, y=10, w=190)
