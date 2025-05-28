@@ -4,10 +4,66 @@ import tempfile
 from fpdf import FPDF
 from PIL import Image
 from flask import Flask, request, send_file, jsonify
+import os
+import json
 
 app = Flask(__name__)
 
 def process_scan(image_path):
+    # Ordenar e transformar
+    def order_points(pts):
+        pts = np.array(pts).reshape(4, 2)
+        rect = np.zeros((4, 2), dtype="float32")
+        s = pts.sum(axis=1)
+        rect[0] = pts[np.argmin(s)]
+        rect[2] = pts[np.argmax(s)]
+        diff = np.diff(pts, axis=1)
+        rect[1] = pts[np.argmin(diff)]
+        rect[3] = pts[np.argmax(diff)]
+        return rect
+
+    def four_point_transform(image, pts):
+        rect = order_points(pts)
+        (tl, tr, br, bl) = rect
+        widthA = np.linalg.norm(br - bl)
+        widthB = np.linalg.norm(tr - tl)
+        heightA = np.linalg.norm(tr - br)
+        heightB = np.linalg.norm(tl - bl)
+        maxWidth = max(int(widthA), int(widthB))
+        maxHeight = max(int(heightA), int(heightB))
+        dst = np.array([
+            [0, 0],
+            [maxWidth - 1, 0],
+            [maxWidth - 1, maxHeight - 1],
+            [0, maxHeight - 1]
+        ], dtype="float32")
+        M = cv2.getPerspectiveTransform(rect, dst)
+        return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
+
+    # Tenta ler vértices de um arquivo JSON (gerado por IA)
+    vertices_path = image_path.replace('.jpg', '.json')
+    if os.path.exists(vertices_path):
+        with open(vertices_path, 'r') as f:
+            vertices = np.array(json.load(f), dtype='float32')
+        image = cv2.imread(image_path)
+        orig = image.copy()
+        warped_color = four_point_transform(orig, vertices)
+        # Pós-processamento: nitidez e binarização forte
+        kernel_sharp = np.array([[0, -1, 0], [-1, 5,-1], [0, -1, 0]])
+        warped_color = cv2.filter2D(warped_color, -1, kernel_sharp)
+        warped_gray = cv2.cvtColor(warped_color, cv2.COLOR_BGR2GRAY)
+        _, warped_bin = cv2.threshold(warped_gray, 180, 255, cv2.THRESH_BINARY)
+        warped_final = cv2.cvtColor(warped_bin, cv2.COLOR_GRAY2BGR)
+
+        # Salva imagem final para PDF
+        temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        temp_img = temp_file.name.replace('.pdf', '.jpg')
+        cv2.imwrite(temp_img, warped_final)
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.image(temp_img, x=10, y=10, w=190)
+        pdf.output(temp_file.name)
+        return temp_file.name
     image = cv2.imread(image_path)
     orig = image.copy()
     
@@ -79,36 +135,6 @@ def process_scan(image_path):
     debug_img = orig.copy()
     cv2.drawContours(debug_img, [doc_cnt], -1, (0, 255, 0), 3)
     cv2.imwrite("detected_contour.jpg", debug_img)
-
-    # Ordenar e transformar
-    def order_points(pts):
-        pts = pts.reshape(4, 2)
-        rect = np.zeros((4, 2), dtype="float32")
-        s = pts.sum(axis=1)
-        rect[0] = pts[np.argmin(s)]
-        rect[2] = pts[np.argmax(s)]
-        diff = np.diff(pts, axis=1)
-        rect[1] = pts[np.argmin(diff)]
-        rect[3] = pts[np.argmax(diff)]
-        return rect
-
-    def four_point_transform(image, pts):
-        rect = order_points(pts)
-        (tl, tr, br, bl) = rect
-        widthA = np.linalg.norm(br - bl)
-        widthB = np.linalg.norm(tr - tl)
-        heightA = np.linalg.norm(tr - br)
-        heightB = np.linalg.norm(tl - bl)
-        maxWidth = max(int(widthA), int(widthB))
-        maxHeight = max(int(heightA), int(heightB))
-        dst = np.array([
-            [0, 0],
-            [maxWidth - 1, 0],
-            [maxWidth - 1, maxHeight - 1],
-            [0, maxHeight - 1]
-        ], dtype="float32")
-        M = cv2.getPerspectiveTransform(rect, dst)
-        return cv2.warpPerspective(image, M, (maxWidth, maxHeight))
 
     try:
         warped_color = four_point_transform(orig, doc_cnt)
