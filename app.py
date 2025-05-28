@@ -60,10 +60,12 @@ def get_documentai_vertices(image_path, service_account_json=None):
         for v in vertices:
             if 'x' in v and 'y' in v:
                 points.append([int(v['x']*w), int(v['y']*h)])
+        print('Vértices retornados pelo Document AI:', vertices)
+        print('Pontos válidos extraídos:', points)
         if len(points) == 4:
             return np.array(points, dtype="float32")
         else:
-            print('Vértices retornados pelo Document AI não possuem 4 pontos válidos:', vertices)
+            print('Não há 4 pontos válidos. Quantidade:', len(points))
     except Exception as e:
         print('Erro ao processar vértices do Document AI:', str(e), vertices)
     return None
