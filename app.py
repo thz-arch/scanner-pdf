@@ -10,6 +10,7 @@ import requests
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request as GoogleAuthRequest
 import google.auth
+import base64
 
 app = Flask(__name__)
 
@@ -18,14 +19,24 @@ def get_documentai_vertices(image_path, service_account_json=None):
     Envia a imagem para o Google Document AI e retorna os vértices do documento, se encontrados.
     """
     endpoint = "https://us-documentai.googleapis.com/v1/projects/803691180758/locations/us/processors/97093285b878f134:process"
-    # Usa credenciais padrão do ambiente (Cloud Run, GCE, local com GOOGLE_APPLICATION_CREDENTIALS)
     creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
     creds.refresh(GoogleAuthRequest())
     token = creds.token
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    # Lê e codifica a imagem em base64
     with open(image_path, "rb") as f:
-        files = {"rawDocument.content": f.read()}
-    response = requests.post(endpoint, headers=headers, files={"file": open(image_path, "rb")})
+        img_bytes = f.read()
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+    payload = {
+        "rawDocument": {
+            "content": img_b64,
+            "mimeType": "image/jpeg"
+        }
+    }
+    response = requests.post(endpoint, headers=headers, json=payload)
     if response.status_code != 200:
         return None
     data = response.json()
