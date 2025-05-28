@@ -30,6 +30,12 @@ def process_scan(image_path):
     # Borda
     edged = cv2.Canny(closed, 50, 150)
 
+    # Salva imagens intermediárias para debug
+    cv2.imwrite("debug_gray.jpg", gray)
+    cv2.imwrite("debug_thresh.jpg", thresh)
+    cv2.imwrite("debug_closed.jpg", closed)
+    cv2.imwrite("debug_edged.jpg", edged)
+
     # Contornos
     contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
