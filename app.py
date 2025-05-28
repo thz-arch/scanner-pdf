@@ -13,25 +13,26 @@ def process_scan(image_path):
     
     # Pré-processamento
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    # Aumenta contraste com CLAHE
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    gray = clahe.apply(gray)
-    # Binarização fixa para destacar folha branca
-    _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+    # Suaviza sombras
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    # Binarização adaptativa
+    thresh = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                   cv2.THRESH_BINARY, 21, 15)
     # Inverter se fundo for escuro
     if np.mean(thresh) < 127:
         thresh = cv2.bitwise_not(thresh)
 
-    # Fechamento morfológico (kernel maior para unir bordas)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+    # Fechamento morfológico (kernel menor)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     closed = cv2.dilate(closed, kernel, iterations=2)
 
-    # Borda com Canny mais sensível
+    # Borda
     edged = cv2.Canny(closed, 30, 100)
 
     # Salva imagens intermediárias para debug
     cv2.imwrite("debug_gray.jpg", gray)
+    cv2.imwrite("debug_blur.jpg", blur)
     cv2.imwrite("debug_thresh.jpg", thresh)
     cv2.imwrite("debug_closed.jpg", closed)
     cv2.imwrite("debug_edged.jpg", edged)
@@ -58,7 +59,7 @@ def process_scan(image_path):
             if w == 0 or h == 0:
                 continue
             aspect = max(w, h) / min(w, h)
-            if 1.2 < aspect < 1.5:
+            if 1.2 < aspect < 1.7:
                 doc_cnt = approx
                 break
     # Se não encontrar, usa a imagem inteira
