@@ -38,6 +38,7 @@ def get_documentai_vertices(image_path, service_account_json=None):
     }
     response = requests.post(endpoint, headers=headers, json=payload)
     if response.status_code != 200:
+        print('Document AI erro:', response.status_code, response.text)
         return None
     data = response.json()
     # Procura os vértices do documento na resposta
