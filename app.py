@@ -6,8 +6,43 @@ from PIL import Image
 from flask import Flask, request, send_file, jsonify
 import os
 import json
+import requests
+from google.oauth2 import service_account
+from google.auth.transport.requests import Request as GoogleAuthRequest
 
 app = Flask(__name__)
+
+def get_documentai_vertices(image_path, service_account_json=None):
+    """
+    Envia a imagem para o Google Document AI e retorna os vértices do documento, se encontrados.
+    """
+    endpoint = "https://us-documentai.googleapis.com/v1/projects/803691180758/locations/us/processors/97093285b878f134:process"
+    # Gera o Bearer Token usando a service account
+    credentials = service_account_json or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if credentials and isinstance(credentials, str) and credentials.endswith('.json'):
+        creds = service_account.Credentials.from_service_account_file(credentials, scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        creds.refresh(GoogleAuthRequest())
+        token = creds.token
+    else:
+        token = None
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    with open(image_path, "rb") as f:
+        files = {"rawDocument.content": f.read()}
+    response = requests.post(endpoint, headers=headers, files={"file": open(image_path, "rb")})
+    if response.status_code != 200:
+        return None
+    data = response.json()
+    # Procura os vértices do documento na resposta
+    try:
+        vertices = data["document"]["pages"][0]["detectedDocument"]["layout"]["boundingPoly"]["normalizedVertices"]
+        img = cv2.imread(image_path)
+        h, w = img.shape[:2]
+        points = [[int(v["x"]*w), int(v["y"]*h)] for v in vertices]
+        if len(points) == 4:
+            return np.array(points, dtype="float32")
+    except Exception:
+        pass
+    return None
 
 def process_scan(image_path):
     # Ordenar e transformar
